@@ -1,0 +1,563 @@
+New-BurntToastNotification -Text "Please ensure all instances of Microsoft Word & Microsoft Excel are saved and closed.`n`nThis script will forcefully shut them down." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+
+#Create Framework For Customer Name Input Box
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'Manual CD Creation'
+$form.Size = New-Object System.Drawing.Size(300,150)
+$form.StartPosition = 'CenterScreen'
+
+$okButton = New-Object System.Windows.Forms.Button
+$okButton.Location = New-Object System.Drawing.Point(75,80)
+$okButton.Size = New-Object System.Drawing.Size(75,23)
+$okButton.Text = 'OK'
+$okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+$form.AcceptButton = $okButton
+$form.Controls.Add($okButton)
+
+$cancelButton = New-Object System.Windows.Forms.Button
+$cancelButton.Location = New-Object System.Drawing.Point(150,80)
+$cancelButton.Size = New-Object System.Drawing.Size(75,23)
+$cancelButton.Text = 'Cancel'
+$cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+$form.CancelButton = $cancelButton
+$form.Controls.Add($cancelButton)
+
+$labelCusName = New-Object System.Windows.Forms.Label
+$labelCusName.Location = New-Object System.Drawing.Point(8,20)
+$labelCusName.Size = New-Object System.Drawing.Size(200,20)
+$labelCusName.Text = 'Customer Name:'
+$form.Controls.Add($labelCusName)
+
+$textBoxCusName = New-Object System.Windows.Forms.TextBox
+$textBoxCusName.Location = New-Object System.Drawing.Point(10,40)
+$textBoxCusName.Size = New-Object System.Drawing.Size(260,20)
+$form.Controls.Add($textBoxCusName)
+
+$form.Topmost = $true
+
+$form.Add_Shown({$textBoxCusName.Select()})
+$result = $form.ShowDialog()
+
+if ($result -eq [System.Windows.Forms.DialogResult]::OK)
+{
+    $cusname = $textBoxCusName.Text
+} 
+elseif ($result -eq [System.Windows.Forms.DialogResult]::Cancel)
+{
+    New-BurntToastNotification -Text "Script Execution Cancelled" -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+    throw "Script Cancelled"
+}
+if ($cusname -eq "" -eq $true)
+{
+    New-BurntToastNotification -Text "Script Execution Cancelled`n`nNo value entered for customer's name." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+    throw "Customer Name invalid"
+}
+
+#Create text file and parse for values
+$CDtextfile = Get-Content -Raw "N:\Manual Shipments\CD Manual Automation\Text Files\CDinfo.txt"
+
+#Determine Initials based on .txt file created via Outlook
+If ($CDtextfile -match "From..Barris, John" -eq $True) 
+    {$TestInitials = "J.B."}
+elseif ($CDtextfile -match "From..Smith, Bryan" -eq $True)
+    {$TestInitials = "B.S."}
+elseif ($CDtextfile -match "From..Knowles, Kyle" -eq $True)
+    {$TestInitials = "K.K."}
+
+#Determine Serial Number (SNMatch), Product Line (PL Match), Inputs/Outputs (IOMatch), Block Size (BSmatch)
+$SNmatch = [regex]::Matches($CDtextfile, "[0-9]"*10)
+$PLmatch = [regex]::Matches($CDtextfile, "[\w]*[0-9]*[X,F,H,P,R]+[0-9][/?]*[0-9][\w]*")
+$IOmatch = [regex]::Matches($PLMatch, "[0-9]+X[0-9]*")
+$BSmatch = [regex]::Matches($CDtextfile, "[A-Z][A-Z][0-9][A-Z][A-Z]")
+
+$NumberOfSerials = $SNMatch.Count
+$SerialID = 0
+$SerialNums = while ($NumberOfSerials-1 -ge $SerialID) {
+$SNmatch[$SerialID].Value
+$SerialID++
+}
+
+$PLMatchFinal = $PLMatch.Value | Where-Object {$_.Length -gt 10} 
+
+#Values found from E-Mail
+$pline = $PLMatchFinal.Substring(0,3)
+$freq = $PLMatchFinal.Substring(3,4)
+$inout = $IOmatch.Value
+if ($pline -eq "QXM" -or $pline -eq "QXF") {
+$QXMQXFblock = -join $PLMatchFinal[-8]
+$blocksizevalue = $QXMQXFblock
+}
+else {
+$blocksizevalue = ($BSmatch.Value).Substring(2,1)
+}
+
+#Date Formatting
+$yy = "{0:yy}" -f (get-date)
+$mm = "{0:MMM}" -f (get-date)
+$yyyy = "{0:yyyy}" -f (get-date)
+
+
+
+$date = "$mm '$yy"
+
+#Declare Variables For Plots Creation
+$ExcelMMFilePath = "N:\Manual Shipments\CD Manual Automation\MailMerge Files\AutoMMPlotSource.xlsm"
+$MacroInsertion = "FileDialog_Insertion_Click"
+$MacroIsolation = "FileDialog_Isolation_Click"
+$WordInsertionFilePath = "N:\Manual Shipments\CD Manual Automation\MailMerge Files\AutoMMInsertion.doc"
+$WordIsolationFilePath = "N:\Manual Shipments\CD Manual Automation\MailMerge Files\AutoMMIsolation.doc"
+$PlotsFolder = "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Plots"
+
+#Directory Formatting Instructions Array
+$FolderNamingSets = @(
+[pscustomobject]@{
+ProductLine = $pline
+SerialNum = $serialnums
+Frequency = $freq
+InputOutput = $inout}
+)
+
+#Custom Objects defining Product Line Properties
+$QX1 = [pscustomobject]@{
+ArrayID = 0
+Name = "QX1"
+Sales = "XTREME 32"
+FirmwareFolder = "QX1_QF1"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"4x28"}
+    2 {"8x24"}
+    3 {"12x20"}
+    4 {"16x16"}
+    5 {"20x12"}
+    6 {"24x8"}
+    7 {"28x4"}
+    }
+}
+
+$QX2 = [pscustomobject]@{
+ArrayID = 1
+Name = "QX2"
+Sales = "XTREME 80"
+FirmwareFolder = "QX2_QF2"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"16x64"}
+    2 {"24x40"}
+    3 {"32x32"}
+    4 {"40x24"}
+    5 {"64x16"}
+    6 {"32x48"}
+    7 {"20x48"}
+    8 {"60x20"}
+    9 {"48x32"}
+    }
+}
+
+$QF1 = [pscustomobject]@{
+ArrayID = 2
+Name = "QF1"
+Sales = "XTREME 32-C"
+FirmwareFolder = "QX1_QF1"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"28x4"}
+    2 {"24x8"}
+    3 {"16x16"}
+    }
+}
+
+$QF2 = [pscustomobject]@{
+ArrayID = 3
+Name = "QF2"
+Sales = "XTREME 80-C"
+FirmwareFolder = "QX2_QF2"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"64x16"}
+    2 {"32x32"}
+    }
+}
+
+$QXM = [pscustomobject]@{
+ArrayID = 4
+Name = "QXM"
+Sales = "XTREME 256"
+FirmwareFolder = "QXM_QXF"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"128x128"}
+    2 {"64x192"}
+    3 {"56x200"}
+    4 {"48x208"}
+    5 {"40x216"}
+    6 {"32x224"}
+    7 {"96x160"}
+    8 {"160x96"}
+    9 {"8x248"}
+    0 {"80x176"}
+    "A" {"24x342"}
+    "B" {"208x48"}
+    "C" {"N/A - Dummy"}
+    }
+}
+
+$QXF = [pscustomobject]@{
+ArrayID = 5
+Name = "QXF"
+Sales = "XTREME 256-C"
+FirmwareFolder = "QXM_QXF"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 0
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = switch ("$blocksizevalue")
+    {
+    1 {"128x128"}
+    2 {"192x64"}
+    3 {"224x32"}
+    4 {"208x48"}
+    5 {"216x40"}
+    6 {"200x56"}
+    7 {"160x96"}
+    8 {"96x160"}
+    9 {"248x8"}
+    0 {"176x80"}
+    "A" {"234x24"}
+    }
+}
+
+$QH1 = [pscustomobject]@{
+ArrayID = 6
+Name = "QH1"
+Sales = "XTREME 32"
+FirmwareFolder = "QH1"
+FirmwareFileExt = "*Kit*.zip"
+FolderNamingSetID = 1
+IUorSystem = "INDIVIDUAL UNITS"
+BlockSize = "8x8_8x8"
+}
+
+#Array of Product Lines for quick referencing
+$ProductLines = @($QX1, $QX2, $QF1, $QF2, $QXM, $QXF, $QH1)
+
+#Uses Product Line array to set the parameters for ArrayID and Directory Naming Conventions
+$ProductLines | ForEach-Object {
+    If ($_.Name -eq $pline) 
+    {
+    $x = $_.ArrayID
+    $y = $_.FolderNamingSetID
+    }
+}
+
+$LineChoice = $ProductLines[$x]
+
+$firmwarelocation = $LineChoice.FirmwareFolder
+$firmfile = $LineChoice.FirmwareFileExt
+$salesname = $LineChoice.Sales
+$blocksize = $LineChoice.BlockSize
+$IUorSystem = $LineChoice.IUorSystem
+
+#Declare variables for use with Mail Merge action
+$z = 0
+$k = 0
+$i = 0
+$row = 2
+$proggy = 1
+
+#Declare Variables in relation to Part Numbers
+if ($NumberOfSerials -ge 2) {
+$serialnum = $SerialNums[$z]
+}
+elseif ($NumberOfSerials -eq 1) {
+$serialnum = $SerialNums
+}
+$pline = $PLMatchFinal.Substring(0,3)
+$freq = $PLMatchFinal.Substring(3,4)
+$inout = $IOmatch.Value
+if ($x -eq 0..3) {
+$blocksizevalue = ($BSmatch.Value).Substring(2,1)
+}
+if ($x -in 4,5) {
+$QXMQXFblock = -join $PLMatchFinal[-8]
+$blocksizevalue = $QXMblock
+}
+
+#If statement for properly formatting part number in case of QH1 selection
+if ($pline -eq "QH1") {
+$QH1PartNumber = $PLmatch -replace "/|_",""
+}
+
+#Close all instances of Excel and Word
+Stop-Process -Name EXCEL -EA SilentlyContinue
+Stop-Process -Name WINWORD -EA SilentlyContinue
+
+#Set parameters for Excel
+$Excel = New-Object -ComObject excel.application
+$Excel.Visible = $false
+$Excel.DisplayAlerts = $false
+
+
+#QX1, QX2, QF1, QF2, QXM, QXF Mail merge
+if ($y -eq 0) {
+    foreach ($item in $SerialNums) {
+        if ($NumberOfSerials -ge 2) {
+            $serialnum = $SerialNums[$z]
+        }
+        elseif ($NumberOfSerials -eq 1) {
+            $serialnum = $SerialNums
+        }
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\" -ItemType Directory
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Firmware" -ItemType Directory
+                Get-ChildItem -Path "F:\Documentation\Specifications\Firmware\$firmwarelocation" -Depth 5 -Include $firmfile | Sort LastWriteTime | Select -Last 1 | Copy-Item -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Firmware"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Spec Sheets" -ItemType Directory
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Spec Sheets\$pline\$PLMatchFinal Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Spec Sheets\$PLMatchFinal.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals" -ItemType Directory
+                    if ($x -in 4,5) {
+                    Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\$salesname Quick Start Guide Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\$salesname Quick Start Guide.pdf"
+                    Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\Replacing*.pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\Replacing $salesname QPE Controller Cards.pdf"
+                    }
+                    if ($x -eq 5) {
+                    Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\XTREME 256-C Output Port Monitoring User Guide Supplement*.pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\XTREME 256-C Output Port Monitoring User Guide Supplement.pdf"
+                    }
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\$salesname $blocksize Quick Start Guide Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\$salesname $blocksize Quick Start Guide.pdf"
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\Xtreme Series SNMP MIB Object Manual\XTREME Series SNMP MIB Object Manual Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\XTREME Series SNMP MIB Object Manual.pdf"
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\$salesname Users Guide Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\$salesname Users Guide.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Protocols" -ItemType Directory
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Protocols\Protocol v2.15 Rev [A-Z] (QE3-Xtreme-RFM).pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Protocols\XTREME Protocol.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Plots" -ItemType Directory
+        $z++
+        if ($z -gt $NumberOfSerials-1)
+        {break}
+                       
+    }
+        $z = 0
+        While ($z -le $NumberOfSerials-1) {
+            $Workbook = $Excel.Workbooks.Open($ExcelMMFilePath)
+            $Excel.Run("InsertionIsolationClear")
+            $VariablesSheet = $Workbook.Worksheets.Item(1)
+            $InsertionRLSheet = $Workbook.Worksheets.Item(2)
+            $IsolationSheet = $Workbook.Worksheets.Item(3)
+            $Word = New-Object -ComObject Word.Application
+            $Word.Visible = $true
+            $k = 0
+            $row = 2
+            if ($NumberOfSerials -ge 2) {
+                $serialnum = $SerialNums[$z]
+            }
+            elseif ($NumberOfSerials -eq 1) {
+                $serialNum = $SerialNums
+            }
+            $InsertionPlotLocation = gci -Path "F:\Production Test\$yyyy\$IUorSystem\$pline\$serialnum*\PLOTS\*INSERTION*\*"
+            $InsertionNumberOfPlots = ($InsertionPlotLocation.Count-1)
+            $IsolationPlotLocation = gci -Path "F:\Production Test\$yyyy\$IUorSystem\$pline\$serialnum*\PLOTS\*ISOLATION*\*"
+            $IsolationNumberOfPlots = ($IsolationPlotLocation.Count-1)
+                if ($z -gt $NumberOfSerials-1) {break}
+                else {$z++}
+                    While ($k -le $InsertionNumberOfPlots) {
+                        if ($k -gt $InsertionNumberOfPlots) {break}
+                        elseif ($k -le $InsertionNumberOfPlots) {
+                        $InsertionInsOuts = ($InsertionPlotLocation[$k].Name -split "[-.]")
+                        $InsertionRLSheet.Cells.Item($row, 1) = $InsertionPlotLocation[$k].FullName
+                        $InsertionRLSheet.Cells.Item($row, 8) = $InsertionInsOuts[0]
+                        $InsertionRLSheet.Cells.Item($row, 9) = $InsertionInsOuts[1]
+                        $k++, $row++}
+                    }
+                    $k = 0
+                    $row = 2
+                    While ($k -le $IsolationNumberOfPlots) {
+                        if ($k -gt $IsolationNumberOfPlots) {break}
+                        elseif ($k -le $IsolationNumberOfPlots) {
+                        $IsolationInsOuts = ($IsolationPlotLocation[$k].Name -split "[-.]")
+                        $IsolationSheet.Cells.Item($row, 1) = $IsolationPlotLocation[$k].FullName
+                        $IsolationSheet.Cells.Item($row, 8) = $IsolationInsOuts[0]
+                        $IsolationSheet.Cells.Item($row, 9) = $IsolationInsOuts[1]
+                        $k++, $row++
+                        }
+                        }
+            $VariablesSheet.Activate()
+                $VariablesSheet.Cells.Item(1, 2) = $TestInitials
+                $VariablesSheet.Cells.Item(2, 2) = $serialnum
+                $VariablesSheet.Cells.Item(3, 2) = $salesname
+                $VariablesSheet.Cells.Item(4, 2) = " "
+            $InsertionRLSheet.Activate()
+                $Excel.Run("FileDialog_Insertion_Click")
+            $IsolationSheet.Activate()
+                $Excel.Run("FileDialog_Isolation_Click")
+            $Workbook.SaveAs($ExcelMMFilePath, 52)
+                $Excel.Quit()
+            $InsertionTemplate = $Word.Documents.Open($WordInsertionFilepath)
+                $Word.Run("AddDataIns")
+                $WordProcess = Get-Process WINWORD
+                $WordHandle = $WordProcess.MainWindowHandle
+                Set-ForegroundWindow -Handle $WordHandle
+                $PlotsProgressIns = New-BTProgressBar -Title "Insertion Plots Done" -Status "$serialnum" -Value (($proggy)/($NumberOfSerials*2))
+                New-BurntToastNotification -ProgressBar $PlotsProgressIns -Text "Plots finished for $serialnum.`n`nPlease manually Split the Merge.`n`nClose all instances of Microsoft Word to continue." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+                $proggy++
+                Wait-Process -Name WINWORD
+            $Word = New-Object -ComObject Word.Application
+            $Word.Visible = $true
+            $IsolationTemplate = $Word.Documents.Open($WordIsolationFilepath)
+                $Word.Run("AddDataIso")
+                $WordProcess = Get-Process WINWORD
+                $WordHandle = $WordProcess.MainWindowHandle
+                Set-ForegroundWindow $WordHandle
+                $PlotsProgressIso = New-BTProgressBar -Title "Isolation Plots Done" -Status "$serialnum" -Value (($proggy)/($NumberOfSerials*2))
+                New-BurntToastNotification -ProgressBar $PlotsProgressIso -Text "Please manually Split the Merge.`n`nClose all instances of Microsoft Word to continue." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+                $proggy++
+                Wait-Process -Name WINWORD
+        }
+        $z = 0
+        foreach ($item in $SerialNums) {
+               if ($NumberOfSerials -ge 2) {
+                    $serialnum = $SerialNums[$z]
+               }
+        elseif ($NumberOfSerials -eq 1) {
+                $serialnum = $SerialNums
+               }
+                Remove-Item -Path "N:\Manual Shipments\$pline\$pline $freq $inout $cusname Qty. 1 $serialnum ($date Shipment)\Plots\*.docx"
+                Remove-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots\*NoName*.pdf"
+                $z++
+            if ($z -gt $NumberOfSerials-1)
+            {break}
+        }
+}
+#QH1 Mail Merge
+elseif ($y -eq 1) {
+    foreach ($item in $SerialNums) {
+            if ($NumberOfSerials -ge 2) {
+                $serialnum = $SerialNums[$z]
+            }
+            elseif ($NumberOfSerials -eq 1) {
+                $serialNum = $SerialNums
+            }
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\" -ItemType Directory
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Firmware" -ItemType Directory
+                Get-ChildItem -Path "F:\Documentation\Specifications\Firmware\$firmwarelocation" -Depth 5 -Include $firmfile | Sort LastWriteTime | Select -Last 1 | Copy-Item -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Firmware"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Spec Sheets" -ItemType Directory
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Spec Sheets\$pline\$QH1PartNumber Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Spec Sheets\$QH1PartNumber.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Manuals" -ItemType Directory
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\XTREME 32 Hybrid 8x8 Quick Start Guide Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\$salesname Hybrid 8x8 Quick Start Guide.pdf"
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\Xtreme Series SNMP MIB Object Manual\XTREME Series SNMP MIB Object Manual Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\XTREME Series SNMP MIB Object Manual.pdf"
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Manuals\$pline\$salesname*Rev [A-Z].pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Manuals\$salesname Hybrid Users Guide.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Protocols" -ItemType Directory
+                Copy-Item -Path "F:\Documentation\DOCS\Customer Literature\Protocols\Protocol v2.15 Rev [A-Z] (QE3-Xtreme-RFM).pdf" -Destination "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Protocols\XTREME Protocol.pdf"
+            New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots" -ItemType Directory
+                New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots\FAN-IN" -ItemType Directory
+                New-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots\FAN-OUT" -ItemType Directory
+        $z++
+        if ($z -gt $NumberOfSerials-1)
+        {break}
+    }
+        $z = 0
+        While ($z -le $NumberOfSerials-1) {
+            for ($i=0; $i -lt 2; $i++) {
+                    if ($i % 2 -eq 0 ) {$Config = "IN"}
+                    elseif ($i % 2 -eq 1) {$Config = "OUT"}
+            $Workbook = $Excel.Workbooks.Open($ExcelMMFilePath)
+            $Excel.Run("InsertionIsolationClear")
+            $VariablesSheet = $Workbook.Worksheets.Item(1)
+            $InsertionRLSheet = $Workbook.Worksheets.Item(2)
+            $IsolationSheet = $Workbook.Worksheets.Item(3)
+            $Word = New-Object -ComObject Word.Application
+            $Word.Visible = $true
+            $k = 0
+            $row = 2
+            if ($NumberOfSerials -ge 2) {
+                $serialnum = $SerialNums[$z]
+            }
+            elseif ($NumberOfSerials -eq 1) {
+                $serialNum = $SerialNums
+            }
+            $InsertionPlotLocation = gci -Path "F:\Production Test\$yyyy\$IUorSystem\$pline\$serialnum*\PLOTS\*$Config\*INSERTION*\*"
+            $InsertionNumberOfPlots = ($InsertionPlotLocation.Count-1)
+            $IsolationPlotLocation = gci -Path "F:\Production Test\$yyyy\$IUorSystem\$pline\$serialnum*\PLOTS\*$Config\*ISOLATION*\*"
+            $IsolationNumberOfPlots = ($IsolationPlotLocation.Count-1)
+                if ($z -gt $NumberOfSerials-1) {break}
+                else {if ($i % 2 -eq 1) {$z++}}
+                    While ($k -le $InsertionNumberOfPlots) {
+                        if ($k -gt $InsertionNumberOfPlots) {break}
+                        elseif ($k -le $InsertionNumberOfPlots) {
+                        $InsertionInsOuts = ($InsertionPlotLocation[$k].Name -split "[-.]")
+                        $InsertionRLSheet.Cells.Item($row, 1) = $InsertionPlotLocation[$k].FullName
+                        $InsertionRLSheet.Cells.Item($row, 8) = $InsertionInsOuts[0]
+                        $InsertionRLSheet.Cells.Item($row, 9) = $InsertionInsOuts[1]
+                        $k++, $row++}
+                    }
+                    $k = 0
+                    $row = 2
+                    While ($k -le $IsolationNumberOfPlots) {
+                        if ($k -gt $IsolationNumberOfPlots) {break}
+                        elseif ($k -le $IsolationNumberOfPlots) {
+                        $IsolationInsOuts = ($IsolationPlotLocation[$k].Name -split "[-.]")
+                        $IsolationSheet.Cells.Item($row, 1) = $IsolationPlotLocation[$k].FullName
+                        $IsolationSheet.Cells.Item($row, 8) = $IsolationInsOuts[0]
+                        $IsolationSheet.Cells.Item($row, 9) = $IsolationInsOuts[1]
+                        $k++, $row++
+                        }
+                        }
+            $VariablesSheet.Activate()
+                $VariablesSheet.Cells.Item(1, 2) = $TestInitials
+                $VariablesSheet.Cells.Item(2, 2) = $serialnum
+                $VariablesSheet.Cells.Item(3, 2) = $salesname
+                $VariablesSheet.Cells.Item(4, 2) = "FAN $Config"
+            $InsertionRLSheet.Activate()
+                $Excel.Run("FileDialog_Insertion_Click")
+            $IsolationSheet.Activate()
+                $Excel.Run("FileDialog_Isolation_Click")
+            $Workbook.SaveAs($ExcelMMFilePath, 52)
+                $Excel.Quit()
+            $InsertionTemplate = $Word.Documents.Open($WordInsertionFilepath)
+                $Word.Run("AddDataIns")
+                $WordProcess = Get-Process WINWORD
+                $WordHandle = $WordProcess.MainWindowHandle
+                Set-ForegroundWindow -Handle $WordHandle
+                $PlotsProgressIns = New-BTProgressBar -Title "Insertion Plots Done" -Status "$serialnum" -Value (($proggy)/($NumberOfSerials*4))
+                New-BurntToastNotification -ProgressBar $PlotsProgressIns -Text "Please manually Split the Merge.`n`nClose all instances of Microsoft Word to continue." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+                $proggy++
+                Wait-Process -Name WINWORD
+            $Word = New-Object -ComObject Word.Application
+            $Word.Visible = $true
+            $IsolationTemplate = $Word.Documents.Open($WordIsolationFilepath)
+                $Word.Run("AddDataIso")
+                $WordProcess = Get-Process WINWORD
+                $WordHandle = $WordProcess.MainWindowHandle
+                Set-ForegroundWindow $WordHandle
+                $PlotsProgressIso = New-BTProgressBar -Title "Isolation Plots Done" -Status "$serialnum" -Value (($proggy)/($NumberOfSerials*4))
+                New-BurntToastNotification -ProgressBar $PlotsProgressIso -Text "Please manually Split the Merge.`n`nClose all instances of Microsoft Word to continue." -AppLogo "N:\Manual Shipments\CD Manual Automation\Misc Files\QuintechIcon.png"
+                $proggy++
+                Wait-Process -Name WINWORD
+                    }
+        }
+        $z = 0
+        foreach ($item in $SerialNums) {
+            if ($NumberOfSerials -ge 2) {
+                $serialnum = $SerialNums[$z]
+            }
+            elseif ($NumberOfSerials -eq 1) {
+                $serialNum = $SerialNums
+            }
+                Remove-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots\*\*.docx"
+                Remove-Item -Path "N:\Manual Shipments\$pline\$pline $freq $blocksize $cusname Qty. 1 $serialnum ($date Shipment)\Plots\*\*NoName*.pdf"
+                $z++
+            if ($z -gt $NumberOfSerials-1)
+            {break}
+        }
+}
